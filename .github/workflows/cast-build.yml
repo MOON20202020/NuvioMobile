@@ -36,8 +36,17 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Prepare properties
-        run: touch local.properties
+      - name: Prepare properties (temporary signing key, re-signed later)
+        run: |
+          keystore="${RUNNER_TEMP}/temp.p12"
+          keytool -genkeypair -keystore "$keystore" -storetype PKCS12 -storepass temppass \
+            -alias temp -keyalg RSA -keysize 2048 -validity 365 -dname "CN=temp" >/dev/null 2>&1
+          {
+            echo "NUVIO_RELEASE_STORE_FILE=${keystore}"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=temppass"
+            echo "NUVIO_RELEASE_KEY_ALIAS=temp"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=temppass"
+          } > local.properties
 
       - name: Build full release APKs
         run: |
@@ -73,11 +82,11 @@ jobs:
         run: |
           apk="$(find androidApp/build/outputs/apk/full/release -name '*arm64-v8a*.apk' | head -n 1)"
           test -n "$apk"
-          cp "$apk" nuvio-cast-arm64-unsigned.apk
+          cp "$apk" nuvio-cast-arm64-tempsigned.apk
           tag="cast-build-${{ github.run_number }}"
-          gh release create "$tag" nuvio-cast-arm64-unsigned.apk \
+          gh release create "$tag" nuvio-cast-arm64-tempsigned.apk \
             --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
             --title "Nuvio Cast build ${{ github.run_number }}" \
-            --notes "Unsigned build of ${{ github.sha }}" \
+            --notes "Temp-signed build of ${{ github.sha }}" \
             --prerelease
