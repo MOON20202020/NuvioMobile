@@ -43,6 +43,9 @@ public final class LocalServer {
     private volatile Uri localContent;
     private volatile boolean running;
 
+    /** User subtitle timing correction: positive shows subtitles later, negative earlier (ms). */
+    public static volatile long subtitleDelayMs;
+
     private final android.content.Context context;
     private volatile String remuxSource;
     private volatile int remuxAudio;
@@ -131,7 +134,7 @@ public final class LocalServer {
             idx = subtitles.indexOf(original);
             if (idx < 0) { subtitles.add(original); idx = subtitles.size() - 1; }
         }
-        return base() + "/sub/" + idx + "_" + Math.max(0, shiftMs) + (vtt ? ".vtt" : ".srt");
+        return base() + "/sub/" + idx + "_" + Math.max(0, shiftMs) + (vtt ? ".vtt" : ".srt") + "?d=" + subtitleDelayMs;
     }
 
     // ------------------------------------------------------------------ request handling
@@ -206,7 +209,8 @@ public final class LocalServer {
         if (text.startsWith("\uFEFF")) text = text.substring(1);
         text = text.replace("\r\n", "\n").replace('\r', '\n');
         List<Cue> cues = SubtitleCues.parse(text);
-        String body = vtt ? SubtitleCues.toVtt(cues, shiftMs) : SubtitleCues.toSrt(cues, shiftMs);
+        long effectiveShift = shiftMs - subtitleDelayMs;
+        String body = vtt ? SubtitleCues.toVtt(cues, effectiveShift) : SubtitleCues.toSrt(cues, effectiveShift);
         byte[] data = body.getBytes("UTF-8");
         writeHead(out, 200, "OK", vtt ? "text/vtt; charset=utf-8" : "application/x-subrip; charset=utf-8", data.length, null);
         out.write(data);
@@ -277,6 +281,7 @@ public final class LocalServer {
         synchronized (headers) { h = new LinkedHashMap<String, String>(headers); }
         com.nuvio.app.features.cast.CastHlsSession session = new com.nuvio.app.features.cast.CastHlsSession(
                 context, source, h, startMs, audioOrdinal, subtitleOrdinal, subtitleName, subtitleLang);
+        session.setSubtitleDelayMs(subtitleDelayMs);
         hls = session;
         return session;
     }

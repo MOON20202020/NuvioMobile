@@ -59,6 +59,9 @@ class CastHlsSession(
     @Volatile private var hasAudio = false
     @Volatile private var hasSubtitles = false
 
+    /** Moves subtitles later (positive) or earlier (negative), in milliseconds. */
+    @Volatile var subtitleDelayMs: Long = 0
+
     /** True when a subtitle track (embedded or added via [addCue]) is published. */
     val publishesSubtitles: Boolean get() = hasSubtitles
 
@@ -200,9 +203,12 @@ class CastHlsSession(
         if (seg != null) {
             val from = seg.startUs
             val to = seg.startUs + seg.durationUs
+            val shift = subtitleDelayMs * 1000
             for (c in cues) {
-                if (c.endUs <= from || c.startUs >= to) continue
-                sb.append(vttTime(c.startUs)).append(" --> ").append(vttTime(c.endUs)).append('\n')
+                val cs = c.startUs + shift
+                val ce = c.endUs + shift
+                if (ce <= 0 || ce <= from || cs >= to) continue
+                sb.append(vttTime(maxOf(0, cs))).append(" --> ").append(vttTime(ce)).append('\n')
                     .append(c.text.replace("&", "&amp;").replace("<", "&lt;").replace("-->", "→")).append("\n\n")
             }
         }

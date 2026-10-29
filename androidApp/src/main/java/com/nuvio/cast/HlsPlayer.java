@@ -65,6 +65,11 @@ final class HlsPlayer implements RemotePlayer {
         inner.load(c);
     }
 
+    /** Rebuilds the stream at the current position (used after changing subtitle timing). */
+    void restartAtCurrent() throws Exception {
+        startAt(positionMs());
+    }
+
     @Override public void play() throws Exception { inner.play(); }
     @Override public void pause() throws Exception { inner.pause(); }
 

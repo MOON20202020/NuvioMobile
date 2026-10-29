@@ -44,6 +44,11 @@ final class RemuxPlayer implements RemotePlayer {
         return c;
     }
 
+    /** Reloads at the current position so the TV fetches subtitles with the new timing. */
+    void restartAtCurrent() throws Exception {
+        seek(positionMs());
+    }
+
     @Override public void play() throws Exception { inner.play(); }
     @Override public void pause() throws Exception { inner.pause(); }
 

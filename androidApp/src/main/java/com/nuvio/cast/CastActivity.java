@@ -76,6 +76,7 @@ public class CastActivity extends Activity implements Discovery.Listener {
     private ProgressBar searching;
     private LinearLayout pickerSection, remoteSection;
     private SeekBar seekBar;
+    private TextView delayLabel;
     private boolean dragging;
     private boolean finishedReported;
 
@@ -84,6 +85,9 @@ public class CastActivity extends Activity implements Discovery.Listener {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        try {
+            LocalServer.subtitleDelayMs = getSharedPreferences("nuvio_cast", MODE_PRIVATE).getLong("sub_delay_ms", 0);
+        } catch (Exception ignored) {}
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         if (Build.VERSION.SDK_INT >= 21) {
             getWindow().setStatusBarColor(BG);
@@ -324,6 +328,24 @@ public class CastActivity extends Activity implements Discovery.Listener {
         card.addView(row2);
         volDown.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { volume(-1); } });
         volUp.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { volume(1); } });
+
+        // Subtitle timing correction (saved for next time).
+        LinearLayout delayRow = new LinearLayout(this);
+        delayRow.setGravity(Gravity.CENTER_VERTICAL);
+        delayRow.setPadding(0, dp(12), 0, 0);
+        TextView earlier = button("الترجمة أبكر", CARD, TEXT);
+        earlier.setTextSize(14);
+        delayLabel = text("", 14, TEXT, true);
+        delayLabel.setGravity(Gravity.CENTER);
+        TextView later = button("الترجمة أبطأ", CARD, TEXT);
+        later.setTextSize(14);
+        delayRow.addView(earlier, lp(0, -2, 1, 4));
+        delayRow.addView(delayLabel, lp(0, -2, 0.8f, 4));
+        delayRow.addView(later, lp(0, -2, 1, 4));
+        remoteSection.addView(delayRow);
+        earlier.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { changeSubtitleDelay(-500); } });
+        later.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { changeSubtitleDelay(500); } });
+        updateDelayLabel();
 
         TextView stop = button("⏹  إيقاف البث", DANGER, Color.WHITE);
         remoteSection.addView(stop, lp(-1, -2, 0, 0));
@@ -694,6 +716,39 @@ public class CastActivity extends Activity implements Discovery.Listener {
     }
 
     private long lastPosition, lastDuration;
+
+    private void updateDelayLabel() {
+        if (delayLabel == null) return;
+        long d = LocalServer.subtitleDelayMs;
+        delayLabel.setText((d > 0 ? "+" : "") + String.format(Locale.US, "%.1f", d / 1000.0) + " ث");
+    }
+
+    private void changeSubtitleDelay(long deltaMs) {
+        LocalServer.subtitleDelayMs = Math.max(-60000, Math.min(60000, LocalServer.subtitleDelayMs + deltaMs));
+        try {
+            getSharedPreferences("nuvio_cast", MODE_PRIVATE).edit().putLong("sub_delay_ms", LocalServer.subtitleDelayMs).apply();
+        } catch (Exception ignored) {}
+        updateDelayLabel();
+        ui.removeCallbacks(applyDelay);
+        ui.postDelayed(applyDelay, 1500);
+    }
+
+    /** Re-sends the movie at the current position so the TV picks up the new subtitle timing. */
+    private final Runnable applyDelay = new Runnable() {
+        public void run() {
+            final RemotePlayer p = sPlayer;
+            if (p == null) return;
+            setStatus("جارٍ تطبيق توقيت الترجمة…", false);
+            if (p instanceof HlsPlayer) {
+                CastActivity.this.run(new Task() { public void go() throws Exception { ((HlsPlayer) p).restartAtCurrent(); } });
+            } else if (p instanceof RemuxPlayer) {
+                CastActivity.this.run(new Task() { public void go() throws Exception { ((RemuxPlayer) p).restartAtCurrent(); } });
+            } else if (videoUri != null && sTarget != null) {
+                startMs = p.positionMs();
+                castTo(sTarget);
+            }
+        }
+    };
 
     private void setStatus(String s, boolean error) {
         statusText.setText(s);
