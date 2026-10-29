@@ -61,7 +61,13 @@ public class CastActivity extends Activity implements Discovery.Listener {
     private final Map<String, String> headers = new LinkedHashMap<String, String>();
     private final List<String> subUrls = new ArrayList<String>();
     private final List<String> subNames = new ArrayList<String>();
-    private int subIndex = 0; // -1 = off
+    private int subIndex = 0; // -1 = off; indexes add-on subtitles, then embedded ones
+    private volatile com.nuvio.app.features.cast.CastRemuxer.Probe probe;
+    private final java.util.concurrent.CountDownLatch probeDone = new java.util.concurrent.CountDownLatch(1);
+    private final List<String> embeddedNames = new ArrayList<String>();
+    private final List<String> embeddedLangs = new ArrayList<String>();
+    private boolean userPickedSubtitle;
+    private TextView noSubsHint;
     private boolean guessedMime;
 
     // Views
@@ -86,6 +92,7 @@ public class CastActivity extends Activity implements Discovery.Listener {
         readIntent(getIntent());
         buildUi();
         discovery = new Discovery(this, this);
+        startProbe();
         if (sPlayer != null && (videoUri == null || TextUtils.equals(title, sTitle))) {
             showRemote(); // reopened while already casting this title
         } else {
@@ -241,19 +248,15 @@ public class CastActivity extends Activity implements Discovery.Listener {
         emptyHint.setLineSpacing(0, 1.3f);
         pickerSection.addView(emptyHint);
 
-        if (subUrls.isEmpty()) {
-            TextView noSubs = text("💬  لا توجد ترجمة جاهزة للبث.\nالترجمة المدمجة داخل ملف الفيلم لا تصل للتلفاز. من المشغّل اضغط زر الترجمة (CC) واختر ترجمة من الإضافات، ثم اضغط زر البث مرة أخرى.", 13, MUTED, false);
-            noSubs.setPadding(dp(4), dp(14), dp(4), 0);
-            noSubs.setLineSpacing(0, 1.25f);
-            pickerSection.addView(noSubs);
-        }
-        if (!subUrls.isEmpty()) {
-            subtitleBtn = button("", CARD, TEXT);
-            subtitleBtn.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { chooseSubtitle(); } });
-            pickerSection.addView(subtitleBtn, lp(-1, -2, 0, 0));
-            ((LinearLayout.LayoutParams) subtitleBtn.getLayoutParams()).topMargin = dp(12);
-            updateSubtitleLabel();
-        }
+        noSubsHint = text("💬  جارٍ البحث عن الترجمة…", 13, MUTED, false);
+        noSubsHint.setPadding(dp(4), dp(14), dp(4), 0);
+        noSubsHint.setLineSpacing(0, 1.25f);
+        pickerSection.addView(noSubsHint);
+        subtitleBtn = button("", CARD, TEXT);
+        subtitleBtn.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { chooseSubtitle(); } });
+        pickerSection.addView(subtitleBtn, lp(-1, -2, 0, 0));
+        ((LinearLayout.LayoutParams) subtitleBtn.getLayoutParams()).topMargin = dp(12);
+        refreshSubtitleUi();
 
         // ---- remote
         remoteSection = new LinearLayout(this);
@@ -339,21 +342,95 @@ public class CastActivity extends Activity implements Discovery.Listener {
         setContentView(scroll);
     }
 
+    private int subtitleCount() {
+        return subUrls.size() + embeddedNames.size();
+    }
+
+    private String subtitleLabel(int i) {
+        if (i < 0) return "بدون";
+        if (i < subUrls.size()) return subNames.get(i);
+        return "مدمجة في الملف: " + embeddedNames.get(i - subUrls.size());
+    }
+
     private void updateSubtitleLabel() {
+        refreshSubtitleUi();
+    }
+
+    private void refreshSubtitleUi() {
         if (subtitleBtn == null) return;
-        subtitleBtn.setText("💬  الترجمة: " + (subIndex < 0 ? "بدون" : subNames.get(subIndex)));
+        int total = subtitleCount();
+        boolean probing = probeDone.getCount() > 0;
+        subtitleBtn.setVisibility(total > 0 ? View.VISIBLE : View.GONE);
+        subtitleBtn.setText("💬  الترجمة: " + subtitleLabel(subIndex));
+        if (total > 0 && !probing) {
+            noSubsHint.setVisibility(View.GONE);
+        } else {
+            noSubsHint.setVisibility(View.VISIBLE);
+            noSubsHint.setText(probing ? "💬  جارٍ البحث عن الترجمة داخل الملف…"
+                    : "💬  لا توجد ترجمة لهذا الفيلم. يمكنك اختيار ترجمة من الإضافات في المشغّل (زر CC) ثم الضغط على زر البث.");
+        }
+    }
+
+    private static boolean isArabic(String nameOrLang) {
+        if (nameOrLang == null) return false;
+        String n = nameOrLang.toLowerCase(Locale.US);
+        return n.startsWith("ar") || n.contains("arab") || n.contains("عرب");
+    }
+
+    /** Picks Arabic when available: add-on first, then embedded. */
+    private void autoPickSubtitle() {
+        for (int i = 0; i < subUrls.size(); i++) if (isArabic(subNames.get(i))) { subIndex = i; return; }
+        for (int i = 0; i < embeddedNames.size(); i++) {
+            if (isArabic(embeddedLangs.get(i)) || isArabic(embeddedNames.get(i))) { subIndex = subUrls.size() + i; return; }
+        }
+        if (!subUrls.isEmpty()) subIndex = 0;
+        else if (!embeddedNames.isEmpty()) subIndex = 0;
+        else subIndex = -1;
+    }
+
+    private void startProbe() {
+        if (videoUri == null) { probeDone.countDown(); return; }
+        final String src = videoUri.toString();
+        final Map<String, String> h = new LinkedHashMap<String, String>(headers);
+        Thread t = new Thread(new Runnable() {
+            public void run() {
+                try {
+                    probe = com.nuvio.app.features.cast.CastRemuxer.probe(getApplicationContext(), src, h);
+                } catch (Throwable ignored) {
+                } finally {
+                    probeDone.countDown();
+                }
+                ui.post(new Runnable() {
+                    public void run() {
+                        com.nuvio.app.features.cast.CastRemuxer.Probe p = probe;
+                        if (p != null && embeddedNames.isEmpty()) {
+                            for (int i = 0; i < p.textNames.length; i++) {
+                                embeddedNames.add(p.textNames[i]);
+                                embeddedLangs.add(p.textLanguages[i]);
+                            }
+                        }
+                        if (!userPickedSubtitle) autoPickSubtitle();
+                        refreshSubtitleUi();
+                    }
+                });
+            }
+        }, "cast-probe");
+        t.setDaemon(true);
+        t.start();
     }
 
     private void chooseSubtitle() {
-        final String[] items = new String[subNames.size() + 1];
+        final int total = subtitleCount();
+        final String[] items = new String[total + 1];
         items[0] = "بدون ترجمة";
-        for (int i = 0; i < subNames.size(); i++) items[i + 1] = subNames.get(i);
+        for (int i = 0; i < total; i++) items[i + 1] = subtitleLabel(i);
         new AlertDialog.Builder(this)
                 .setTitle("اختر الترجمة")
                 .setSingleChoiceItems(items, subIndex + 1, new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int which) {
                         subIndex = which - 1;
-                        updateSubtitleLabel();
+                        userPickedSubtitle = true;
+                        refreshSubtitleUi();
                         d.dismiss();
                     }
                 }).show();
@@ -467,14 +544,26 @@ public class CastActivity extends Activity implements Discovery.Listener {
                     }
                     // Chromecast / Google TV play MKV video but drop its audio: re-package to MP4 on the phone.
                     RemotePlayer active = player;
-                    if (chromecast && needsInspection(mime, guessedMime)) {
+                    final int chosenSub = subIndex;
+                    final boolean embeddedSub = chosenSub >= subUrls.size() && chosenSub - subUrls.size() < embeddedNames.size();
+                    if (chromecast && (embeddedSub || needsInspection(mime, guessedMime))) {
                         ui.post(new Runnable() { public void run() { setStatus("جارٍ تجهيز الفيلم للتلفاز…", false); } });
-                        com.nuvio.app.features.cast.CastRemuxer.Probe probe =
-                                com.nuvio.app.features.cast.CastRemuxer.probe(getApplicationContext(), videoUri.toString(), headers);
+                        try { probeDone.await(40, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+                        com.nuvio.app.features.cast.CastRemuxer.Probe probe = CastActivity.this.probe;
+                        if (probe == null) {
+                            probe = com.nuvio.app.features.cast.CastRemuxer.probe(getApplicationContext(), videoUri.toString(), headers);
+                        }
                         if (probe != null && probe.getCanRemux()) {
                             sServer.start();
                             sServer.setHeaders(headers);
-                            active = new RemuxPlayer(player, sServer, videoUri.toString(), probe.durationMs, 0);
+                            if (embeddedSub) {
+                                // Embedded subtitles only reach the TV through a live HLS stream.
+                                int ord = chosenSub - subUrls.size();
+                                active = new HlsPlayer(player, sServer, videoUri.toString(), probe.durationMs, 0,
+                                        ord, embeddedNames.get(ord), embeddedLangs.get(ord), null);
+                            } else {
+                                active = new RemuxPlayer(player, sServer, videoUri.toString(), probe.durationMs, 0);
+                            }
                             sPlayer = active;
                             if (probe.audioConvert) {
                                 ui.post(new Runnable() { public void run() { setStatus("جارٍ تحويل الصوت للتلفاز…", false); } });
@@ -483,11 +572,11 @@ public class CastActivity extends Activity implements Discovery.Listener {
                     }
                     if (active != player) {
                         m.url = videoUri.toString();
-                        if (subIndex >= 0) {
-                            m.subtitleSource = subUrls.get(subIndex);
-                            m.subtitleUrl = sServer.subtitleUrl(subUrls.get(subIndex), true);
-                            m.subtitleName = subNames.get(subIndex);
-                            m.subtitleLang = guessLang(subNames.get(subIndex));
+                        if (chosenSub >= 0 && chosenSub < subUrls.size()) {
+                            m.subtitleSource = subUrls.get(chosenSub);
+                            m.subtitleUrl = sServer.subtitleUrl(subUrls.get(chosenSub), true);
+                            m.subtitleName = subNames.get(chosenSub);
+                            m.subtitleLang = guessLang(subNames.get(chosenSub));
                         }
                         active.load(m);
                         ui.post(new Runnable() { public void run() { setStatus("يعمل الآن ✓", false); } });
@@ -501,7 +590,7 @@ public class CastActivity extends Activity implements Discovery.Listener {
                     } else {
                         m.url = videoUri.toString();
                     }
-                    if (subIndex >= 0) {
+                    if (subIndex >= 0 && subIndex < subUrls.size()) {
                         m.subtitleUrl = sServer.subtitleUrl(subUrls.get(subIndex), chromecast);
                         m.subtitleName = subNames.get(subIndex);
                         m.subtitleLang = guessLang(subNames.get(subIndex));

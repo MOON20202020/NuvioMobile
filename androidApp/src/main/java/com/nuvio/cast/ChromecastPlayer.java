@@ -121,15 +121,22 @@ public final class ChromecastPlayer implements RemotePlayer {
                 .put("contentId", media.url)
                 .put("contentUrl", media.url)
                 .put("streamType", "BUFFERED")
-                .put("contentType", media.mime)
+                .put("contentType", media.hls ? "application/x-mpegurl" : media.mime)
                 .put("metadata", meta);
+        wantHlsText = media.hls && media.hlsSubtitles;
+        hlsTextEnabled = false;
+        if (media.hls) {
+            m.put("hlsSegmentFormat", "fmp4");
+            m.put("hlsVideoSegmentFormat", "fmp4");
+            m.put("textTrackStyle", subtitleStyle());
+        }
         JSONObject load = new JSONObject()
                 .put("type", "LOAD")
                 .put("requestId", nextId())
                 .put("sessionId", sessionId)
                 .put("autoplay", true)
                 .put("currentTime", media.startMs / 1000.0);
-        if (media.subtitleUrl != null) {
+        if (media.subtitleUrl != null && !media.hls) {
             JSONObject track = new JSONObject()
                     .put("trackId", 1)
                     .put("type", "TEXT")
@@ -139,12 +146,7 @@ public final class ChromecastPlayer implements RemotePlayer {
                     .put("name", media.subtitleName == null ? "Subtitles" : media.subtitleName);
             if (media.subtitleLang != null) track.put("language", media.subtitleLang);
             m.put("tracks", new JSONArray().put(track));
-            m.put("textTrackStyle", new JSONObject()
-                    .put("backgroundColor", "#00000000")
-                    .put("edgeType", "OUTLINE")
-                    .put("edgeColor", "#000000FF")
-                    .put("foregroundColor", "#FFFFFFFF")
-                    .put("fontScale", 1.1));
+            m.put("textTrackStyle", subtitleStyle());
             load.put("activeTrackIds", new JSONArray().put(1));
         }
         load.put("media", m);
@@ -156,6 +158,38 @@ public final class ChromecastPlayer implements RemotePlayer {
             Thread.sleep(150);
         }
         if (loadFailed) throw new IOException(error == null ? "التلفاز لم يستطع تشغيل هذا الرابط" : error);
+    }
+
+    private volatile boolean wantHlsText;
+    private volatile boolean hlsTextEnabled;
+
+    private static JSONObject subtitleStyle() throws org.json.JSONException {
+        return new JSONObject()
+                .put("backgroundColor", "#00000000")
+                .put("edgeType", "OUTLINE")
+                .put("edgeColor", "#000000FF")
+                .put("foregroundColor", "#FFFFFFFF")
+                .put("fontScale", 1.1);
+    }
+
+    /** HLS subtitle tracks are discovered by the TV; switch the first one on once it appears. */
+    private void maybeEnableHlsText(JSONObject media) throws Exception {
+        if (!wantHlsText || hlsTextEnabled || media == null || mediaSessionId < 0) return;
+        JSONArray tracks = media.optJSONArray("tracks");
+        if (tracks == null) return;
+        for (int i = 0; i < tracks.length(); i++) {
+            JSONObject t = tracks.getJSONObject(i);
+            if ("TEXT".equals(t.optString("type"))) {
+                hlsTextEnabled = true;
+                send(NS_MEDIA, transportId, new JSONObject()
+                        .put("type", "EDIT_TRACKS_INFO")
+                        .put("requestId", nextId())
+                        .put("mediaSessionId", mediaSessionId)
+                        .put("activeTrackIds", new JSONArray().put(t.getInt("trackId")))
+                        .put("textTrackStyle", subtitleStyle()));
+                return;
+            }
+        }
     }
 
     @Override public void play() throws Exception { mediaCmd("PLAY", null); }
@@ -281,6 +315,7 @@ public final class ChromecastPlayer implements RemotePlayer {
                     positionStamp = System.currentTimeMillis();
                 }
                 JSONObject media = st.optJSONObject("media");
+                maybeEnableHlsText(media);
                 if (media != null && media.has("duration")) {
                     double d = media.optDouble("duration", 0);
                     if (d > 0) durationMs = (long) (d * 1000);

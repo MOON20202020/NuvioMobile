@@ -26,6 +26,8 @@ public interface RemotePlayer {
         public long startMs;
         public String subtitleUrl;      // WebVTT (Chromecast) or SRT (DLNA)
         public String subtitleSource;   // original subtitle link (re-served with a time shift)
+        public boolean hls;             // fMP4 HLS stream built on the phone
+        public boolean hlsSubtitles;    // the HLS stream carries a subtitle track to switch on
         public String subtitleName;
         public String subtitleLang;
     }

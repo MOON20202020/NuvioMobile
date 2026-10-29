@@ -33,6 +33,9 @@ object CastRemuxer {
         @JvmField val audioCopy: Boolean,
         @JvmField val audioConvert: Boolean,
         @JvmField val audioNames: Array<String>,
+        /** Subtitle tracks embedded in the file (MKV), in track order. */
+        @JvmField val textNames: Array<String> = emptyArray(),
+        @JvmField val textLanguages: Array<String?> = emptyArray(),
     ) {
         /** True when the stream can be served as MP4 with working sound. */
         val canRemux: Boolean get() = videoMime != null && videoMime in FragmentedMp4Muxer.SUPPORTED_VIDEO_SAMPLE_MIME_TYPES &&
@@ -48,11 +51,19 @@ object CastRemuxer {
             var audioMime: String? = null
             var durationUs = 0L
             val names = ArrayList<String>()
+            val textNames = ArrayList<String>()
+            val textLangs = ArrayList<String?>()
             for (i in 0 until extractor.trackCount) {
                 val f = extractor.getTrackFormat(i)
                 val mime = f.getString(MediaFormat.KEY_MIME) ?: continue
                 if (f.containsKey(MediaFormat.KEY_DURATION)) durationUs = maxOf(durationUs, f.getLong(MediaFormat.KEY_DURATION))
                 if (mime.startsWith("video/") && videoMime == null) videoMime = mime
+                if (CastHlsSession.isText(mime)) {
+                    val lang = if (f.containsKey(MediaFormat.KEY_LANGUAGE)) f.getString(MediaFormat.KEY_LANGUAGE) else null
+                    val clean = lang?.takeIf { it.isNotBlank() && it != "und" }
+                    textLangs += clean
+                    textNames += languageName(clean) ?: "ترجمة ${textNames.size + 1}"
+                }
                 if (mime.startsWith("audio/")) {
                     if (audioMime == null) audioMime = mime
                     val lang = if (f.containsKey(MediaFormat.KEY_LANGUAGE)) f.getString(MediaFormat.KEY_LANGUAGE) else null
@@ -62,7 +73,8 @@ object CastRemuxer {
             val copy = audioMime != null && audioMime in FragmentedMp4Muxer.SUPPORTED_AUDIO_SAMPLE_MIME_TYPES &&
                 audioMime != MimeTypes.AUDIO_RAW
             val convert = audioMime != null && !copy && hasDecoder(audioMime)
-            Probe(videoMime, audioMime, durationUs / 1000, copy, convert, names.toTypedArray())
+            Probe(videoMime, audioMime, durationUs / 1000, copy, convert, names.toTypedArray(),
+                textNames.toTypedArray(), textLangs.toTypedArray())
         } catch (t: Throwable) {
             Log.w(TAG, "probe failed", t)
             null
@@ -172,6 +184,26 @@ object CastRemuxer {
         }
     }
 
+    @JvmStatic
+    fun languageName(code: String?): String? {
+        if (code.isNullOrBlank()) return null
+        val c = code.lowercase(java.util.Locale.US)
+        return when {
+            c.startsWith("ar") -> "عربي"
+            c.startsWith("en") -> "English"
+            c.startsWith("fr") -> "Français"
+            c.startsWith("es") || c == "spa" -> "Español"
+            c.startsWith("de") || c == "ger" -> "Deutsch"
+            c.startsWith("it") -> "Italiano"
+            c.startsWith("pt") || c == "por" -> "Português"
+            c.startsWith("tr") -> "Türkçe"
+            c.startsWith("ru") -> "Русский"
+            c.startsWith("ja") || c == "jpn" -> "日本語"
+            else -> runCatching { java.util.Locale.forLanguageTag(c).getDisplayLanguage(java.util.Locale.forLanguageTag("ar")) }
+                .getOrNull()?.takeIf { it.isNotBlank() && it.lowercase() != c } ?: code
+        }
+    }
+
     private fun shortCodec(mime: String): String = when (mime) {
         MimeTypes.AUDIO_AAC -> "AAC"
         MimeTypes.AUDIO_AC3 -> "Dolby AC3"
@@ -188,7 +220,7 @@ object CastRemuxer {
         runCatching { MediaCodec.createDecoderByType(mime).release(); true }.getOrDefault(false)
 
     /** Decodes any audio the phone can decode and re-encodes it as stereo AAC-LC. */
-    private class AudioTranscoder(input: MediaFormat) {
+    internal class AudioTranscoder(input: MediaFormat) {
         private val decoder: MediaCodec = MediaCodec.createDecoderByType(input.getString(MediaFormat.KEY_MIME)!!)
         private val encoder: MediaCodec
         private val sampleRate: Int = input.getInteger(MediaFormat.KEY_SAMPLE_RATE).let { if (it in 8000..48000) it else 48000 }

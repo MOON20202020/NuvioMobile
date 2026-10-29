@@ -90,6 +90,7 @@ public final class LocalServer {
 
     public void stop() {
         stopRemux();
+        stopHls();
         running = false;
         try { if (server != null) server.close(); } catch (Exception ignored) {}
         server = null;
@@ -158,6 +159,8 @@ public final class LocalServer {
                 serveSubtitle(out, path);
             } else if (path.startsWith("/p/")) {
                 serveProxy(out, method, path, req);
+            } else if (path.startsWith("/hls/")) {
+                serveHls(out, method, path);
             } else if (path.startsWith("/remux/")) {
                 serveRemux(out, method, path);
             } else if (path.startsWith("/local/")) {
@@ -262,6 +265,62 @@ public final class LocalServer {
         synchronized (headers) { h = new LinkedHashMap<String, String>(headers); }
         com.nuvio.app.features.cast.CastRemuxer.remux(context, src, h, startMs, remuxAudio,
                 new java.io.BufferedOutputStream(out, 256 * 1024), cancel);
+    }
+
+    private volatile com.nuvio.app.features.cast.CastHlsSession hls;
+
+    /** Starts (replacing any previous one) a live HLS stream of {@code source} from {@code startMs}. */
+    public com.nuvio.app.features.cast.CastHlsSession startHls(String source, long startMs, int audioOrdinal,
+            int subtitleOrdinal, String subtitleName, String subtitleLang) {
+        stopHls();
+        Map<String, String> h;
+        synchronized (headers) { h = new LinkedHashMap<String, String>(headers); }
+        com.nuvio.app.features.cast.CastHlsSession session = new com.nuvio.app.features.cast.CastHlsSession(
+                context, source, h, startMs, audioOrdinal, subtitleOrdinal, subtitleName, subtitleLang);
+        hls = session;
+        return session;
+    }
+
+    public String hlsUrl(com.nuvio.app.features.cast.CastHlsSession session) {
+        return base() + "/hls/" + session.id + "/master.m3u8";
+    }
+
+    public void stopHls() {
+        com.nuvio.app.features.cast.CastHlsSession old = hls;
+        hls = null;
+        if (old != null) old.stop();
+    }
+
+    private void serveHls(OutputStream out, String method, String path) throws Exception {
+        String rest = path.substring(5);
+        int q = rest.indexOf('?');
+        if (q >= 0) rest = rest.substring(0, q);
+        int slash = rest.indexOf('/');
+        com.nuvio.app.features.cast.CastHlsSession session = hls;
+        if (slash < 0 || session == null || !rest.substring(0, slash).equals(session.id)) {
+            writeHead(out, 404, "Not Found", "text/plain", 0, null);
+            return;
+        }
+        kotlin.Pair<String, Object> res = session.serve(rest.substring(slash + 1));
+        if (res == null) {
+            writeHead(out, 404, "Not Found", "text/plain", 0, null);
+            return;
+        }
+        Object body = res.getSecond();
+        Map<String, String> extra = new LinkedHashMap<String, String>();
+        extra.put("Cache-Control", "no-cache");
+        if (body instanceof byte[]) {
+            byte[] data = (byte[]) body;
+            writeHead(out, 200, "OK", res.getFirst(), data.length, extra);
+            if (!method.equals("HEAD")) out.write(data);
+        } else {
+            java.io.File f = (java.io.File) body;
+            writeHead(out, 200, "OK", res.getFirst(), f.length(), extra);
+            if (!method.equals("HEAD")) {
+                FileInputStream in = new FileInputStream(f);
+                try { copy(in, out, -1); } finally { in.close(); }
+            }
+        }
     }
 
     public void stopRemux() {
