@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Forward10
@@ -503,6 +504,15 @@ private fun PlayerHeader(
                             buttonSize = metrics.headerIconSize + 16.dp,
                             iconSize = metrics.headerIconSize,
                             onClick = onSubmitIntroClick,
+                        )
+                    }
+                    if (onOpenInExternalPlayer != null && CastToTv.isSupported) {
+                        PlayerHeaderIconButton(
+                            icon = Icons.Rounded.Cast,
+                            contentDescription = stringResource(Res.string.player_cast_to_tv),
+                            buttonSize = metrics.headerIconSize + 16.dp,
+                            iconSize = metrics.headerIconSize,
+                            onClick = { CastToTv.launch(onOpenInExternalPlayer) },
                         )
                     }
                     if (onOpenInExternalPlayer != null) {

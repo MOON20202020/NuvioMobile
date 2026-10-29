@@ -13,12 +13,14 @@ import java.io.File
 import java.net.URI
 
 private const val AndroidSystemPlayerId = "android_system"
+private const val CAST_ACTIVITY_CLASS = "com.nuvio.cast.CastActivity"
 
 internal actual object ExternalPlayerPlatform {
     private var appContext: Context? = null
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
+        CastToTv.isSupported = true
     }
 
     actual fun defaultPlayerId(): String? = AndroidSystemPlayerId
@@ -69,6 +71,10 @@ internal actual object ExternalPlayerPlatform {
         request: ExternalPlayerPlaybackRequest,
         uri: Uri,
     ): Intent = Intent(Intent.ACTION_VIEW).apply {
+        if (CastToTv.consumePending()) {
+            // Player cast button: open the built-in cast screen directly.
+            setClassName(context.packageName, CAST_ACTIVITY_CLASS)
+        }
         setDataAndType(uri, request.sourceUrl.videoMimeType())
         addCategory(Intent.CATEGORY_DEFAULT)
         if (uri.scheme.equals("content", ignoreCase = true)) {
