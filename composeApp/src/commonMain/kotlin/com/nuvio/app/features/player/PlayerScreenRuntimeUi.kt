@@ -394,7 +394,8 @@ private fun PlayerScreenRuntime.RenderPlayerControls(
                     PlayerStreamsRepository.pauseSearchForPlayback()
                     openExternal(
                         ExternalPlayerPlaybackRequest(
-                            sourceUrl = activeSourceUrl,
+                            // Torrents play from the local P2P engine URL, not the magnet/source link.
+                            sourceUrl = if (isP2pPlaybackActive) p2pResolvedSourceUrl ?: activeSourceUrl else activeSourceUrl,
                             title = title,
                             streamTitle = activeStreamTitle,
                             sourceHeaders = activeSourceHeaders,

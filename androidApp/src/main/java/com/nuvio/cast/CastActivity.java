@@ -440,7 +440,7 @@ public class CastActivity extends Activity implements Discovery.Listener {
             public void run() {
                 if (old != null) old.release();
                 try {
-                    if (sServer == null) sServer = new LocalServer(getContentResolver());
+                    if (sServer == null) sServer = new LocalServer(getApplicationContext());
                     final boolean chromecast = target.kind == CastTarget.CHROMECAST;
                     RemotePlayer.Media m = new RemotePlayer.Media();
                     m.title = title;
@@ -453,11 +453,38 @@ public class CastActivity extends Activity implements Discovery.Listener {
                     boolean viaProxy = local || !headers.isEmpty();
                     if (scheme.startsWith("http") && guessedMime) {
                         String probed = probeMime(videoUri.toString(), headers);
-                        if (probed != null) { mime = probed; m.mime = probed; }
+                        if (probed != null) { mime = probed; m.mime = probed; guessedMime = false; }
                     }
                     if (needsPhone || viaProxy || subIndex >= 0) {
                         sServer.start();
                         sServer.setHeaders(headers);
+                    }
+                    // Chromecast / Google TV play MKV video but drop its audio: re-package to MP4 on the phone.
+                    RemotePlayer active = player;
+                    if (chromecast && needsInspection(mime, guessedMime)) {
+                        ui.post(new Runnable() { public void run() { setStatus("جارٍ تجهيز الفيلم للتلفاز…", false); } });
+                        com.nuvio.app.features.cast.CastRemuxer.Probe probe =
+                                com.nuvio.app.features.cast.CastRemuxer.probe(getApplicationContext(), videoUri.toString(), headers);
+                        if (probe != null && probe.getCanRemux()) {
+                            sServer.start();
+                            sServer.setHeaders(headers);
+                            active = new RemuxPlayer(player, sServer, videoUri.toString(), probe.durationMs, 0);
+                            sPlayer = active;
+                            if (probe.audioConvert) {
+                                ui.post(new Runnable() { public void run() { setStatus("جارٍ تحويل الصوت للتلفاز…", false); } });
+                            }
+                        }
+                    }
+                    if (active != player) {
+                        m.url = videoUri.toString();
+                        if (subIndex >= 0) {
+                            m.subtitleUrl = sServer.subtitleUrl(subUrls.get(subIndex), true);
+                            m.subtitleName = subNames.get(subIndex);
+                            m.subtitleLang = guessLang(subNames.get(subIndex));
+                        }
+                        active.load(m);
+                        ui.post(new Runnable() { public void run() { setStatus("يعمل الآن ✓", false); } });
+                        return;
                     }
                     if (needsPhone) {
                         String ext = mime.contains("matroska") ? "mkv" : mime.contains("webm") ? "webm" : "mp4";
@@ -489,6 +516,14 @@ public class CastActivity extends Activity implements Discovery.Listener {
                 }
             }
         });
+    }
+
+    /** Containers the Cast receiver can't play with sound, or that we couldn't identify. */
+    private static boolean needsInspection(String mime, boolean guessed) {
+        String m = mime == null ? "" : mime.toLowerCase(Locale.US);
+        if (m.contains("mpegurl") || m.contains("dash")) return false;
+        if (m.contains("matroska") || m.contains("x-msvideo") || m.contains("avi")) return true;
+        return guessed;
     }
 
     /** Asks the server what the video really is (torrent links have no file extension). */

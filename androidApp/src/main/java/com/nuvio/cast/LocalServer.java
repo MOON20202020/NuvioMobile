@@ -43,8 +43,24 @@ public final class LocalServer {
     private volatile Uri localContent;
     private volatile boolean running;
 
-    public LocalServer(ContentResolver resolver) {
-        this.resolver = resolver;
+    private final android.content.Context context;
+    private volatile String remuxSource;
+    private volatile int remuxAudio;
+    private java.util.concurrent.atomic.AtomicBoolean remuxCancel;
+
+    public LocalServer(android.content.Context context) {
+        this.context = context.getApplicationContext();
+        this.resolver = this.context.getContentResolver();
+    }
+
+    /**
+     * URL on the phone that serves {@code source} re-packaged as MP4 starting at {@code startMs}
+     * (fixes MKV playing without sound on Chromecast / Google TV).
+     */
+    public String remuxUrl(String source, long startMs, int audioOrdinal) {
+        remuxSource = source;
+        remuxAudio = audioOrdinal;
+        return base() + "/remux/" + startMs + "/" + System.nanoTime() + ".mp4";
     }
 
     public synchronized void start() throws Exception {
@@ -73,6 +89,7 @@ public final class LocalServer {
     }
 
     public void stop() {
+        stopRemux();
         running = false;
         try { if (server != null) server.close(); } catch (Exception ignored) {}
         server = null;
@@ -133,6 +150,8 @@ public final class LocalServer {
                 serveSubtitle(out, path);
             } else if (path.startsWith("/p/")) {
                 serveProxy(out, method, path, req);
+            } else if (path.startsWith("/remux/")) {
+                serveRemux(out, method, path);
             } else if (path.startsWith("/local/")) {
                 serveLocal(out, method, req);
             } else {
@@ -202,6 +221,34 @@ public final class LocalServer {
         if (!method.equals("HEAD") && body != null) copy(body, out, -1);
         if (body != null) body.close();
         c.disconnect();
+    }
+
+    private void serveRemux(OutputStream out, String method, String path) throws Exception {
+        String[] parts = path.split("/");
+        long startMs = Long.parseLong(parts[2]);
+        String src = remuxSource;
+        if (src == null) { writeHead(out, 404, "Not Found", "text/plain", 0, null); return; }
+        StringBuilder sb = new StringBuilder();
+        sb.append("HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nAccept-Ranges: none\r\n");
+        sb.append("Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: *\r\n");
+        sb.append("Cache-Control: no-cache\r\nConnection: close\r\n\r\n");
+        out.write(sb.toString().getBytes("UTF-8"));
+        if (method.equals("HEAD")) return;
+        java.util.concurrent.atomic.AtomicBoolean cancel = new java.util.concurrent.atomic.AtomicBoolean(false);
+        synchronized (this) {
+            if (remuxCancel != null) remuxCancel.set(true); // only one TV stream at a time
+            remuxCancel = cancel;
+        }
+        Map<String, String> h;
+        synchronized (headers) { h = new LinkedHashMap<String, String>(headers); }
+        com.nuvio.app.features.cast.CastRemuxer.remux(context, src, h, startMs, remuxAudio,
+                new java.io.BufferedOutputStream(out, 256 * 1024), cancel);
+    }
+
+    public void stopRemux() {
+        synchronized (this) {
+            if (remuxCancel != null) remuxCancel.set(true);
+        }
     }
 
     private void serveLocal(OutputStream out, String method, Map<String, String> req) throws Exception {

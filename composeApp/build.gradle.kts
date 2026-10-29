@@ -462,6 +462,7 @@ kotlin {
                 implementation(libs.androidx.media3.session)
                 implementation(libs.androidx.media3.common)
                 implementation(libs.androidx.media3.container)
+                implementation("androidx.media3:media3-muxer:1.8.0")
                 implementation(libs.androidx.media3.extractor)
                 implementation("com.google.guava:guava:33.3.1-android")
                 implementation("androidx.media3:media3-database:1.8.0")
