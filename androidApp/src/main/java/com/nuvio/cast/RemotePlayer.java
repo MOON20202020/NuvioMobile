@@ -25,6 +25,7 @@ public interface RemotePlayer {
         public String title;
         public long startMs;
         public String subtitleUrl;      // WebVTT (Chromecast) or SRT (DLNA)
+        public String subtitleSource;   // original subtitle link (re-served with a time shift)
         public String subtitleName;
         public String subtitleLang;
     }

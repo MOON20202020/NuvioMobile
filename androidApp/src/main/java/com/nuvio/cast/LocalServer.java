@@ -120,9 +120,17 @@ public final class LocalServer {
 
     /** Registers a subtitle and returns its URL ({@code vtt} for Chromecast, otherwise SRT). */
     public String subtitleUrl(String original, boolean vtt) {
+        return subtitleUrl(original, vtt, 0);
+    }
+
+    /** Subtitle URL whose cue times are moved {@code shiftMs} earlier (for streams that restart at 0). */
+    public String subtitleUrl(String original, boolean vtt, long shiftMs) {
         int idx;
-        synchronized (subtitles) { subtitles.add(original); idx = subtitles.size() - 1; }
-        return base() + "/sub/" + idx + (vtt ? ".vtt" : ".srt");
+        synchronized (subtitles) {
+            idx = subtitles.indexOf(original);
+            if (idx < 0) { subtitles.add(original); idx = subtitles.size() - 1; }
+        }
+        return base() + "/sub/" + idx + "_" + Math.max(0, shiftMs) + (vtt ? ".vtt" : ".srt");
     }
 
     // ------------------------------------------------------------------ request handling
@@ -166,33 +174,44 @@ public final class LocalServer {
 
     private void serveSubtitle(OutputStream out, String path) throws Exception {
         String name = path.substring(5);
+        int q = name.indexOf('?');
+        if (q >= 0) name = name.substring(0, q);
         boolean vtt = name.endsWith(".vtt");
-        int idx = Integer.parseInt(name.substring(0, name.indexOf('.')));
-        String src = subtitles.get(idx);
+        String stem = name.substring(0, name.indexOf('.'));
+        long shiftMs = 0;
+        int us = stem.indexOf('_');
+        if (us >= 0) { shiftMs = Long.parseLong(stem.substring(us + 1)); stem = stem.substring(0, us); }
+        String src = subtitles.get(Integer.parseInt(stem));
         byte[] raw;
         if (src.startsWith("http")) {
             HttpURLConnection c = (HttpURLConnection) new URL(src).openConnection();
             c.setConnectTimeout(10000);
             c.setReadTimeout(20000);
+            c.setInstanceFollowRedirects(true);
             c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) NuvioCast");
-            raw = readBytes(c.getInputStream());
+            c.setRequestProperty("Accept-Encoding", "identity");
+            InputStream is = c.getInputStream();
+            raw = readBytes(is);
             c.disconnect();
         } else {
             raw = readBytes(resolver.openInputStream(Uri.parse(src)));
         }
+        if (raw.length > 2 && (raw[0] & 0xff) == 0x1f && (raw[1] & 0xff) == 0x8b) {
+            raw = readBytes(new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(raw)));
+        }
         String text = decode(raw);
         if (text.startsWith("\uFEFF")) text = text.substring(1);
         text = text.replace("\r\n", "\n").replace('\r', '\n');
-        boolean isVtt = text.trim().startsWith("WEBVTT");
-        String body;
-        if (vtt) {
-            body = isVtt ? text : "WEBVTT\n\n" + text.replaceAll("(\\d\\d:\\d\\d:\\d\\d),(\\d\\d\\d)", "$1.$2");
-        } else {
-            body = isVtt ? vttToSrt(text) : text;
-        }
+        List<Cue> cues = SubtitleCues.parse(text);
+        String body = vtt ? SubtitleCues.toVtt(cues, shiftMs) : SubtitleCues.toSrt(cues, shiftMs);
         byte[] data = body.getBytes("UTF-8");
         writeHead(out, 200, "OK", vtt ? "text/vtt; charset=utf-8" : "application/x-subrip; charset=utf-8", data.length, null);
         out.write(data);
+    }
+
+    static final class Cue {
+        long start, end;
+        String text;
     }
 
     private void serveProxy(OutputStream out, String method, String path, Map<String, String> req) throws Exception {

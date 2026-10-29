@@ -241,6 +241,12 @@ public class CastActivity extends Activity implements Discovery.Listener {
         emptyHint.setLineSpacing(0, 1.3f);
         pickerSection.addView(emptyHint);
 
+        if (subUrls.isEmpty()) {
+            TextView noSubs = text("💬  لا توجد ترجمة جاهزة للبث.\nالترجمة المدمجة داخل ملف الفيلم لا تصل للتلفاز. من المشغّل اضغط زر الترجمة (CC) واختر ترجمة من الإضافات، ثم اضغط زر البث مرة أخرى.", 13, MUTED, false);
+            noSubs.setPadding(dp(4), dp(14), dp(4), 0);
+            noSubs.setLineSpacing(0, 1.25f);
+            pickerSection.addView(noSubs);
+        }
         if (!subUrls.isEmpty()) {
             subtitleBtn = button("", CARD, TEXT);
             subtitleBtn.setOnClickListener(new View.OnClickListener() { public void onClick(View v) { chooseSubtitle(); } });
@@ -478,6 +484,7 @@ public class CastActivity extends Activity implements Discovery.Listener {
                     if (active != player) {
                         m.url = videoUri.toString();
                         if (subIndex >= 0) {
+                            m.subtitleSource = subUrls.get(subIndex);
                             m.subtitleUrl = sServer.subtitleUrl(subUrls.get(subIndex), true);
                             m.subtitleName = subNames.get(subIndex);
                             m.subtitleLang = guessLang(subNames.get(subIndex));

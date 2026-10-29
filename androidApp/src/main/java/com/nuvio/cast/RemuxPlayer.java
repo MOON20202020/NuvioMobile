@@ -36,7 +36,9 @@ final class RemuxPlayer implements RemotePlayer {
         c.mime = "video/mp4";
         c.title = media.title;
         c.startMs = 0;
-        c.subtitleUrl = media.subtitleUrl;
+        c.subtitleUrl = media.subtitleSource != null
+                ? server.subtitleUrl(media.subtitleSource, true, startMs)
+                : media.subtitleUrl;
         c.subtitleName = media.subtitleName;
         c.subtitleLang = media.subtitleLang;
         return c;
