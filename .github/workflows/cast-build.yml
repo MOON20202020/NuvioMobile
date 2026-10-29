@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: cast-build-${{ github.ref }}
@@ -14,12 +14,14 @@ concurrency:
 
 jobs:
   build:
-    name: Build full release APK
+    name: Build full release APK (unsigned)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
-      CAST_KEYSTORE_BASE64: ${{ secrets.CAST_KEYSTORE_BASE64 }}
-      CAST_LOCAL_PROPERTIES_BASE64: ${{ secrets.CAST_LOCAL_PROPERTIES_BASE64 }}
+      # Public client configuration (the same values ship inside the official app).
+      NUVIO_SUPABASE_URL: https://api.nuvio.tv
+      NUVIO_SUPABASE_FALLBACK_URL: https://api-two.nuvioapp.space
+      NUVIO_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxNTIxMzQ2LCJleHAiOjE5MzkyMDEzNDZ9.tmQaj682pwzehpqlgCDMnySOqiUvpgRbrE43T4VJpDI
 
     steps:
       - name: Checkout
@@ -34,14 +36,8 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Configure signing and runtime properties
-        run: |
-          keystore_path="${RUNNER_TEMP}/nuviocast.p12"
-          printf '%s' "${CAST_KEYSTORE_BASE64}" | base64 --decode > "${keystore_path}"
-          printf '%s' "${CAST_LOCAL_PROPERTIES_BASE64}" | base64 --decode > local.properties
-          sed -i -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
-          printf '\nNUVIO_RELEASE_STORE_FILE=%s\n' "${keystore_path}" >> local.properties
-          grep -Eq '^NUVIO_RELEASE_KEY_ALIAS=.+' local.properties || { echo "Missing signing properties" >&2; exit 1; }
+      - name: Prepare properties
+        run: touch local.properties
 
       - name: Build full release APKs
         run: >
@@ -51,10 +47,21 @@ jobs:
           -Pnuvio.app.versionName=0.6.5-beta-cast
           --stacktrace
 
-      - name: Upload arm64 APK
-        uses: actions/upload-artifact@v7
-        with:
-          name: nuvio-cast-arm64
-          path: androidApp/build/outputs/apk/full/release/*arm64-v8a*.apk
-          if-no-files-found: error
-          retention-days: 30
+      - name: List outputs
+        if: always()
+        run: find androidApp/build/outputs -name '*.apk' -exec ls -la {} \; || true
+
+      - name: Publish APK as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk="$(find androidApp/build/outputs/apk/full/release -name '*arm64-v8a*.apk' | head -n 1)"
+          test -n "$apk"
+          cp "$apk" nuvio-cast-arm64-unsigned.apk
+          tag="cast-build-${{ github.run_number }}"
+          gh release create "$tag" nuvio-cast-arm64-unsigned.apk \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Nuvio Cast build ${{ github.run_number }}" \
+            --notes "Unsigned build of ${{ github.sha }}" \
+            --prerelease
