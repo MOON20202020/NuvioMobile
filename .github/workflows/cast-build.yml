@@ -40,12 +40,26 @@ jobs:
         run: touch local.properties
 
       - name: Build full release APKs
-        run: >
-          ./gradlew :androidApp:assembleFullRelease
-          -Pnuvio.android.distribution=full
-          -Pnuvio.ios.distribution=appstore
-          -Pnuvio.app.versionName=0.6.5-beta-cast
-          --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :androidApp:assembleFullRelease \
+            -Pnuvio.android.distribution=full \
+            -Pnuvio.ios.distribution=appstore \
+            -Pnuvio.app.versionName=0.6.5-beta-cast \
+            --stacktrace 2>&1 | tee build.log
+
+      - name: Report build errors as annotations
+        if: failure()
+        run: |
+          # Full logs are not always reachable; surface the key lines as annotations.
+          grep -nE '^e: |error:|ERROR:|What went wrong|FAILURE:|Execution failed|Caused by:|> [A-Z]' build.log \
+            | head -n 60 > errors.txt || true
+          if [ ! -s errors.txt ]; then tail -n 60 build.log > errors.txt; fi
+          split -l 6 errors.txt part_
+          for f in part_*; do
+            msg="$(sed 's/%/%25/g' "$f" | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=build::${msg}"
+          done
 
       - name: List outputs
         if: always()
